@@ -7,7 +7,6 @@ import android.os.Handler
 import android.text.TextUtils
 import com.google.android.gms.security.ProviderInstaller
 import com.google.firebase.crashlytics.FirebaseCrashlytics
-import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.iid.FirebaseInstanceId
 import com.google.gson.Gson
 import covid.trace.morocco.WiqaytnaApp.Companion.firebaseToken
@@ -48,12 +47,12 @@ class SplashActivity : BaseActivity(), ProviderInstaller.ProviderInstallListener
         }
 
         if (TextUtils.isEmpty(
-                PreferencesHelper.getStringPreference(
-                    PreferencesHelper.STATS_UPDATE, ""
+                        PreferencesHelper.getStringPreference(
+                                PreferencesHelper.STATS_UPDATE, ""
+                        )
                 )
-            )
         ) {
-            getStatistics()
+            Utils.getStatistics()
         } else {
             val json = PreferencesHelper.getStringPreference(PreferencesHelper.STATS_UPDATE, "")
             val response = Gson().fromJson(json, StatisticsResponse::class.java)
@@ -62,7 +61,7 @@ class SplashActivity : BaseActivity(), ProviderInstaller.ProviderInstallListener
             val hoursElapsed = diff / 3600
             CentralLog.d("response hours elapsed", hoursElapsed.toString())
             if (hoursElapsed > 2) {
-                getStatistics()
+                Utils.getStatistics()
             } else {
                 WiqaytnaApp.statisticsData = response
             }
@@ -80,7 +79,6 @@ class SplashActivity : BaseActivity(), ProviderInstaller.ProviderInstallListener
             mHandler.postDelayed({
                 if (!Utils.isEmulator()) {
                     goToNextScreen()
-                    finish()
                 } else {
                     finish()
                 }
@@ -95,43 +93,23 @@ class SplashActivity : BaseActivity(), ProviderInstaller.ProviderInstallListener
         } else {
             startActivity(Intent(this, MainActivity::class.java))
         }
+        finishAndRemoveTask()
     }
 
     private fun getFCMToken() {
         FirebaseInstanceId.getInstance().instanceId
-            .addOnCompleteListener { task ->
-                if (!task.isSuccessful) {
-                    CentralLog.w(TAG, "failed to get fcm token ${task.exception}")
-                    return@addOnCompleteListener
-                } else {
-                    // Get new Instance ID token
-                    val token = task.result?.token
-                    firebaseToken = token.toString()
-                    // Log and toast
-                    CentralLog.d(TAG, "FCM token: $token")
-                }
-            }
-    }
-
-    private fun getStatistics() {
-        FirebaseFunctions.getInstance(BuildConfig.FIREBASE_REGION)
-            .getHttpsCallable("stats")
-            .call()
-            .continueWith { task ->
-                if (task.isSuccessful) {
-                    CentralLog.d("response", "${task.result!!.data}")
-                    val json: String = Gson().toJson(task.result!!.data)
-                    PreferencesHelper.setPreference(PreferencesHelper.STATS_UPDATE, json)
-                    val response = Gson().fromJson(json, StatisticsResponse::class.java)
-                    WiqaytnaApp.statisticsData = response
-                } else {
-                    if (task.exception != null) {
-                        crashlytics.recordException(task.exception!!)
+                .addOnCompleteListener { task ->
+                    if (!task.isSuccessful) {
+                        CentralLog.w(TAG, "failed to get fcm token ${task.exception}")
+                        return@addOnCompleteListener
+                    } else {
+                        // Get new Instance ID token
+                        val token = task.result?.token
+                        firebaseToken = token.toString()
+                        // Log and toast
+                        CentralLog.d(TAG, "FCM token: $token")
                     }
-                    crashlytics.setCustomKey("error", "couldn't get the latest stats")
-                    CentralLog.d("response", task.exception.toString())
                 }
-            }
     }
 
     override fun onProviderInstallFailed(p0: Int, p1: Intent?) {

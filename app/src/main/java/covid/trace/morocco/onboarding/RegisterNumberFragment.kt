@@ -78,13 +78,6 @@ class RegisterNumberFragment : OnboardingFragmentInterface() {
         super.onViewCreated(view, savedInstanceState)
         CentralLog.i(TAG, "View created")
 
-        Utils.firebaseAnalyticsEvent(
-            requireContext(),
-            "phone_number_screen",
-            "2",
-            "Onboarding second screen"
-        )
-
         mView = view
 
         phone_number.addTextChangedListener(object : TextWatcher {
@@ -118,12 +111,15 @@ class RegisterNumberFragment : OnboardingFragmentInterface() {
         }
 
         language.setOnClickListener {
-            Utils.firebaseAnalyticsEvent(
-                requireContext(),
-                "phone_number_screen_change_language",
-                "20",
-                "Onboarding second screen"
-            )
+            context?.let{
+                Utils.firebaseAnalyticsEvent(
+                    it,
+                    "phone_number_screen_change_language",
+                    "20",
+                    "Onboarding second screen"
+                )
+            }
+
             LocaleHelper.getInstance().switchLocale()
             requireActivity().recreate()
         }

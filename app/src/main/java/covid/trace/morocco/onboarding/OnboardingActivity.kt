@@ -17,21 +17,20 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.text.TextUtils
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.FragmentManager
 import androidx.fragment.app.FragmentStatePagerAdapter
 import androidx.viewpager.widget.ViewPager
 import com.google.android.gms.tasks.Task
-import com.google.firebase.FirebaseException
-import com.google.firebase.FirebaseTooManyRequestsException
 import com.google.firebase.analytics.FirebaseAnalytics
-import com.google.firebase.auth.*
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.functions.HttpsCallableResult
 import covid.trace.morocco.*
-import covid.trace.morocco.R
 import covid.trace.morocco.WiqaytnaApp.Companion.firebaseToken
 import covid.trace.morocco.WiqaytnaApp.Companion.uid
 import covid.trace.morocco.base.BaseFragmentActivity
@@ -42,16 +41,15 @@ import kotlinx.android.synthetic.main.activity_onboarding.*
 import kotlinx.android.synthetic.main.fragment_otp_new.*
 import pub.devrel.easypermissions.AfterPermissionGranted
 import pub.devrel.easypermissions.EasyPermissions
-import kotlin.properties.Delegates
 
 private const val REQUEST_ENABLE_BT = 123
 private const val PERMISSION_REQUEST_ACCESS_LOCATION = 456
 private const val BATTERY_OPTIMISER = 789
 
 class OnboardingActivity : BaseFragmentActivity(),
-    SetupFragment.OnFragmentInteractionListener,
-    RegisterNumberFragment.OnFragmentInteractionListener,
-    OTPFragment.OnFragmentInteractionListener {
+        SetupFragment.OnFragmentInteractionListener,
+        RegisterNumberFragment.OnFragmentInteractionListener,
+        OTPFragment.OnFragmentInteractionListener {
 
     // [START declare_auth]
     //private var uid: String = ""
@@ -61,132 +59,48 @@ class OnboardingActivity : BaseFragmentActivity(),
     private var crashlytics = FirebaseCrashlytics.getInstance()
 
     private var TAG: String = "OnboardingActivity"
-    private var pagerAdapter: ScreenSlidePagerAdapter? = null
+    private lateinit var pagerAdapter: ScreenSlidePagerAdapter
     private var bleSupported = false
     private var speedUp = false
     private var resendingCode = false
 
     private val functions = FirebaseFunctions.getInstance(BuildConfig.FIREBASE_REGION)
-    private var credential: PhoneAuthCredential by Delegates.notNull()
-    private var verificationId: String by Delegates.notNull()
-    private var resendToken: PhoneAuthProvider.ForceResendingToken by Delegates.notNull()
-    private val phoneNumberVerificationCallbacks =
-        object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
-
-            override fun onVerificationCompleted(receivedCredential: PhoneAuthCredential) {
-                // This callback will be invoked in two situations:
-                // 1 - Instant verification. In some cases the phone number can be instantly
-                //     verified without needing to send or enter a verification code.
-                // 2 - Auto-retrieval. On some devices Google Play services can automatically
-                //     detect the incoming verification SMS and perform verification without
-                //     user action.
-                CentralLog.d(TAG, "onVerificationCompleted: $receivedCredential")
-                credential = receivedCredential
-                signInWithPhoneAuthCredential(credential)
-                speedUp = true
-            }
-
-            override fun onVerificationFailed(e: FirebaseException) {
-                if (e is FirebaseAuthInvalidCredentialsException) {
-                    CentralLog.d(TAG, "FirebaseAuthInvalidCredentialsException", e)
-//                    alertDialog(getString(R.string.verification_failed))
-                    updatePhoneNumberError(getString(R.string.invalid_number))
-
-                } else if (e is FirebaseTooManyRequestsException) {
-                    CentralLog.d(TAG, "FirebaseTooManyRequestsException", e)
-                    alertDialog(getString(R.string.too_many_requests))
-                }
-
-                enableFragmentbutton()
-
-                CentralLog.d(TAG, "On Verification failure: ${e.message}")
-                onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
-            }
-
-            override fun onCodeSent(
-                receivedVerificationId: String,
-                token: PhoneAuthProvider.ForceResendingToken
-            ) {
-                // The SMS verification code has been sent to the provided phone number, we
-                // now need to ask the user to enter the code and then construct a credential
-                // by combining the code with a verification ID.
-
-                verificationId = receivedVerificationId
-                resendToken = token
-
-                CentralLog.d(TAG, "onCodeSent: $receivedVerificationId")
-                if (resendingCode) {
-                    onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
-                } else {
-                    navigateToNextPage()
-                }
-            }
-        }
-
-    private fun enableFragmentbutton() {
-        val interfaceObject: OnboardingFragmentInterface? = pagerAdapter?.getItem(pager.currentItem)
-        interfaceObject?.enableButton()
-    }
-
-    private fun alertDialog(desc: String?) {
-        val dialogBuilder = AlertDialog.Builder(this)
-        dialogBuilder.setMessage(desc)
-            .setCancelable(false)
-            .setPositiveButton(
-                getString(R.string.ok)
-            ) { dialog, _ ->
-                dialog.dismiss()
-            }.show()
-    }
-
-    private fun signInWithPhoneAuthCredential(credential: PhoneAuthCredential) {
-        FirebaseAuth.getInstance().signInWithCredential(credential)
-            .addOnCompleteListener(this) { task ->
-                if (task.isSuccessful) {
-                    // Sign in success, update UI with the signed-in user's information
-                    CentralLog.d(TAG, "signInWithCredential:success")
-
-                    if (BluetoothMonitoringService.broadcastMessage == null || TempIDManager.needToUpdate(
-                            applicationContext
-                        )
-                    ) {
-                        getTemporaryID()
-                    }
-                } else {
-                    // Sign in failed, display a message and update the UI
-                    CentralLog.d(TAG, "signInWithCredential:failure", task.exception)
-                    if (task.exception is FirebaseAuthInvalidCredentialsException) {
-                        // The verification code entered was invalid
-                        onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
-                        updateOTPError(getString(R.string.invalid_otp))
-                    } else if (task.exception is FirebaseAuthInvalidUserException) {
-                        alertDialog(getString(R.string.invalid_user))
-                    }
-                    onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
-                }
-            }
-    }
 
     private fun getTemporaryID(): Task<HttpsCallableResult> {
         return TempIDManager.getTemporaryIDs(this, functions)
-            .addOnCompleteListener {
-                if (!isFinishing) {
-                    CentralLog.d(TAG, "Retrieved Temporary ID successfully")
-                    onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
-                    navigateTo(pager.currentItem + 2)
-                    Preference.putHandShakePin(
-                        WiqaytnaApp.AppContext,
-                        uid.substring(0, 5)
+                .addOnCompleteListener {
+
+                    Utils.firebaseAnalyticsEvent(
+                            this.applicationContext,
+                            "getTempID_Successful_onBoarding",
+                            "33",
+                            "getTempID successful onBoarding"
+                    );
+
+                    if (!isFinishing) {
+                        CentralLog.d(TAG, "Retrieved Temporary ID successfully")
+                        onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
+                        navigateTo(pager.currentItem + 2)
+                        Preference.putHandShakePin(
+                                WiqaytnaApp.AppContext,
+                                uid.substring(0, 5)
+                        )
+                    }
+                }.addOnFailureListener { exception ->
+                    crashlytics.recordException(exception)
+                    crashlytics.setCustomKey("error", "couldn't get temporary IDs")
+                    crashlytics.setCustomKey("method", "onBoarding")
+                    Utils.firebaseAnalyticsEvent(
+                            this,
+                            "getTempID_Failed_onBoarding",
+                            "37",
+                            "getTempID failed onBoarding"
                     )
+                    if (!isFinishing) {
+                        CentralLog.d(TAG, "Couldn't Retrieve Temporary ID")
+                        onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
+                    }
                 }
-            }.addOnFailureListener { exception ->
-                crashlytics.recordException(exception)
-                crashlytics.setCustomKey("error", "Couldn't Retrieve Temporary ID")
-                if (!isFinishing) {
-                    CentralLog.d(TAG, "Couldn't Retrieve Temporary ID")
-                    onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
-                }
-            }
     }
 
     private var mIsOpenSetting = false
@@ -231,9 +145,9 @@ class OnboardingActivity : BaseFragmentActivity(),
             }
 
             override fun onPageScrolled(
-                position: Int,
-                positionOffset: Float,
-                positionOffsetPixels: Int
+                    position: Int,
+                    positionOffset: Float,
+                    positionOffsetPixels: Int
             ) {
                 CentralLog.d(TAG, "OnPageScrolled")
             }
@@ -241,13 +155,13 @@ class OnboardingActivity : BaseFragmentActivity(),
             override fun onPageSelected(position: Int) {
                 CentralLog.d(TAG, "position: $position")
                 val onboardingFragment: OnboardingFragmentInterface =
-                    pagerAdapter!!.getItem(position)
+                        pagerAdapter.getItem(position)
                 onboardingFragment.becomesVisible()
                 when (position) {
                     0 -> {
                         Preference.putCheckpoint(
-                            baseContext,
-                            position
+                                baseContext,
+                                position
                         )
                     }
                     1 -> {
@@ -255,20 +169,20 @@ class OnboardingActivity : BaseFragmentActivity(),
                     }
                     2 -> {
                         Preference.putCheckpoint(
-                            baseContext,
-                            position
+                                baseContext,
+                                position
                         )
                     }
                     3 -> {
                         Preference.putCheckpoint(
-                            baseContext,
-                            position
+                                baseContext,
+                                position
                         )
                     }
                     4 -> {
                         Preference.putCheckpoint(
-                            baseContext,
-                            position
+                                baseContext,
+                                position
                         )
                     }
                 }
@@ -302,7 +216,7 @@ class OnboardingActivity : BaseFragmentActivity(),
         // come back to OTP from Setup
         if (pager.currentItem == 3) {
             pager.currentItem = pager.currentItem - 2
-            pagerAdapter!!.notifyDataSetChanged()
+            pagerAdapter.notifyDataSetChanged()
             return
         }
 
@@ -329,8 +243,8 @@ class OnboardingActivity : BaseFragmentActivity(),
             if (it.isDisabled) {
                 val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
                 startActivityForResult(
-                    enableBtIntent,
-                    REQUEST_ENABLE_BT
+                        enableBtIntent,
+                        REQUEST_ENABLE_BT
                 )
             } else {
                 setupPermissionsAndSettings()
@@ -352,8 +266,8 @@ class OnboardingActivity : BaseFragmentActivity(),
                 // Do not have permissions, request them now
                 if (!isFinishing) {
                     EasyPermissions.requestPermissions(
-                        this, getString(R.string.permission_location_rationale),
-                        PERMISSION_REQUEST_ACCESS_LOCATION, *perms
+                            this, getString(R.string.permission_location_rationale),
+                            PERMISSION_REQUEST_ACCESS_LOCATION, *perms
                     )
                 }
             }
@@ -372,9 +286,9 @@ class OnboardingActivity : BaseFragmentActivity(),
         bundle.putString(FirebaseAnalytics.Param.ITEM_NAME, "Onboard Completed for Android Device")
         firebaseAnalytics.logEvent(FirebaseAnalytics.Event.SIGN_UP, bundle)
         val intent = Intent(this, MainActivity::class.java)
-        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+//        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         startActivity(intent)
-        finish()
+        finishAndRemoveTask()
     }
 
     private fun initBluetooth() {
@@ -394,25 +308,25 @@ class OnboardingActivity : BaseFragmentActivity(),
     private fun excludeFromBatteryOptimization() {
         CentralLog.d(TAG, "[excludeFromBatteryOptimization] ")
         val powerManager =
-            this.getSystemService(AppCompatActivity.POWER_SERVICE) as PowerManager
+                this.getSystemService(AppCompatActivity.POWER_SERVICE) as PowerManager
         val packageName = this.packageName
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val intent =
-                Utils.getBatteryOptimizerExemptionIntent(
-                    packageName
-                )
+                    Utils.getBatteryOptimizerExemptionIntent(
+                            packageName
+                    )
 
             if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
                 CentralLog.d(TAG, "Not on Battery Optimization whitelist")
                 //check if there's any activity that can handle this
                 if (Utils.canHandleIntent(
-                        intent,
-                        packageManager
-                    )
+                                intent,
+                                packageManager
+                        )
                 ) {
                     this.startActivityForResult(
-                        intent,
-                        BATTERY_OPTIMISER
+                            intent,
+                            BATTERY_OPTIMISER
                     )
                 } else {
                     //no way of handling battery optimizer
@@ -431,7 +345,11 @@ class OnboardingActivity : BaseFragmentActivity(),
         if (requestCode == REQUEST_ENABLE_BT) {
             if (resultCode == Activity.RESULT_CANCELED) {
                 CentralLog.d(TAG, "request to enable bluetooth canceled")
-                Toast.makeText(baseContext, resources.getString(R.string.setup_app_permission),Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                        baseContext,
+                        resources.getString(R.string.setup_app_permission),
+                        Toast.LENGTH_LONG
+                ).show()
                 return
             } else {
                 setupPermissionsAndSettings()
@@ -447,9 +365,9 @@ class OnboardingActivity : BaseFragmentActivity(),
     }
 
     override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
+            requestCode: Int,
+            permissions: Array<out String>,
+            grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         CentralLog.d(TAG, "[onRequestPermissionsResult] requestCode $requestCode")
@@ -466,29 +384,29 @@ class OnboardingActivity : BaseFragmentActivity(),
                                 val dialogBuilder = AlertDialog.Builder(this)
                                 // set message of alert dialog
                                 dialogBuilder.setMessage(getString(R.string.open_location_setting))
-                                    // if the dialog is cancelable
-                                    .setCancelable(false)
-                                    // positive button text and action
-                                    .setPositiveButton(
-                                        getString(R.string.ok),
-                                        DialogInterface.OnClickListener { _, _ ->
-                                            CentralLog.d(TAG, "user also CHECKED never ask again")
-                                            mIsOpenSetting = true
-                                            val intent =
-                                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                            val uri: Uri =
-                                                Uri.fromParts("package", packageName, null)
-                                            intent.data = uri
-                                            startActivity(intent)
+                                        // if the dialog is cancelable
+                                        .setCancelable(false)
+                                        // positive button text and action
+                                        .setPositiveButton(
+                                                getString(R.string.ok),
+                                                DialogInterface.OnClickListener { _, _ ->
+                                                    CentralLog.d(TAG, "user also CHECKED never ask again")
+                                                    mIsOpenSetting = true
+                                                    val intent =
+                                                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    val uri: Uri =
+                                                            Uri.fromParts("package", packageName, null)
+                                                    intent.data = uri
+                                                    startActivity(intent)
 
-                                        })
-                                    // negative button text and action
-                                    .setNegativeButton(
-                                        getString(R.string.cancel),
-                                        DialogInterface.OnClickListener { dialog, _ ->
-                                            dialog.cancel()
-                                        }).show()
+                                                })
+                                        // negative button text and action
+                                        .setNegativeButton(
+                                                getString(R.string.cancel),
+                                                DialogInterface.OnClickListener { dialog, _ ->
+                                                    dialog.cancel()
+                                                }).show()
                             } else if (Manifest.permission.WRITE_CONTACTS.equals(permission)) {
                                 CentralLog.d(TAG, "user did not CHECKED never ask again")
                             } else {
@@ -503,38 +421,38 @@ class OnboardingActivity : BaseFragmentActivity(),
         }
     }
 
-    fun navigateToNextPage() {
+    private fun navigateToNextPage() {
         CentralLog.d(TAG, "Navigating to next page")
         onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
         if (!speedUp) {
             pager.currentItem = pager.currentItem + 1
-            pagerAdapter!!.notifyDataSetChanged()
+            pagerAdapter.notifyDataSetChanged()
         } else {
             pager.currentItem = pager.currentItem + 2
-            pagerAdapter!!.notifyDataSetChanged()
+            pagerAdapter.notifyDataSetChanged()
             speedUp = false
         }
     }
 
-    fun navigateToPreviousPage() {
+    private fun navigateToPreviousPage() {
         CentralLog.d(TAG, "Navigating to previous page")
         if (mIsResetup) {
             if (pager.currentItem >= 4) {
                 pager.currentItem = pager.currentItem - 1
-                pagerAdapter!!.notifyDataSetChanged()
+                pagerAdapter.notifyDataSetChanged()
             } else {
                 finish()
             }
         } else {
             pager.currentItem = pager.currentItem - 1
-            pagerAdapter!!.notifyDataSetChanged()
+            pagerAdapter.notifyDataSetChanged()
         }
     }
 
     private fun navigateTo(page: Int) {
         CentralLog.d(TAG, "Navigating to page")
         pager.currentItem = page
-        pagerAdapter!!.notifyDataSetChanged()
+        pagerAdapter.notifyDataSetChanged()
     }
 
     fun requestForOTP(phoneNumber: String) {
@@ -542,72 +460,72 @@ class OnboardingActivity : BaseFragmentActivity(),
         speedUp = false
         resendingCode = false
         auth.signInAnonymously()
-            .addOnCompleteListener(this) { task ->
-                if (task.isSuccessful) {
-                    // Sign in success, update UI with the signed-in user's information
-                    CentralLog.d(TAG, "signInAnonymously:success")
-                    val user = auth.currentUser
-                    sendPostRequest(user!!.uid, phoneNumber)
-                        .addOnSuccessListener {
-                            navigateToNextPage()
-                            updateUI(user)
-                        }
-                        .addOnFailureListener { exception ->
-                            crashlytics.recordException(exception)
-                            crashlytics.setCustomKey("error", "getOTPCode:failure")
-                            crashlytics.setCustomKey("phone", phoneNumber)
+                .addOnCompleteListener(this) { task ->
+                    if (task.isSuccessful) {
+                        // Sign in success, update UI with the signed-in user's information
+                        CentralLog.d(TAG, "signInAnonymously:success")
+                        val user = auth.currentUser
+                        sendPostRequest(user!!.uid, phoneNumber)
+                                .addOnSuccessListener {
+                                    navigateToNextPage()
+                                    updateUI(user)
+                                }
+                                .addOnFailureListener { exception ->
+                                    crashlytics.recordException(exception)
+                                    crashlytics.setCustomKey("error", "getOTPCode:failure")
+                                    crashlytics.setCustomKey("phone", phoneNumber)
 
-                            CentralLog.d(TAG, "${exception.message}")
-                            onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
-                            CentralLog.w("getOTPCode:failure", task.exception.toString())
-                            Toast.makeText(
+                                    CentralLog.d(TAG, "${exception.message}")
+                                    onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
+                                    CentralLog.w("getOTPCode:failure", task.exception.toString())
+                                    Toast.makeText(
+                                            baseContext, resources.getString(R.string.server_problem),
+                                            Toast.LENGTH_SHORT
+                                    ).show()
+                                    updateUI(null)
+                                }
+                    } else {
+                        // If sign in fails, display a message to the user.
+                        onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
+                        CentralLog.w("signInAnonymously:failure", task.exception.toString())
+                        task.exception?.let {
+                            crashlytics.recordException(it)
+                            crashlytics.setCustomKey("error", "signInAnonymously failed")
+                        }
+
+                        Toast.makeText(
                                 baseContext, resources.getString(R.string.server_problem),
                                 Toast.LENGTH_SHORT
-                            ).show()
-                            updateUI(null)
-                        }
-                } else {
-                    // If sign in fails, display a message to the user.
-                    onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
-                    CentralLog.w("signInAnonymously:failure", task.exception.toString())
-                    task.exception?.let{
-                        crashlytics.recordException(it)
-                        crashlytics.setCustomKey("error", "signInAnonymously failed")
+                        ).show()
+                        updateUI(null)
                     }
-
-                    Toast.makeText(
-                        baseContext, resources.getString(R.string.server_problem),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    updateUI(null)
                 }
-            }
     }
 
     private fun sendPostRequest(uid: String, phoneNumber: String): Task<HttpsCallableResult> {
 
         val data = hashMapOf(
-            "phoneNumber" to phoneNumber,
-            "token" to firebaseToken,
-            "os" to "ANDROID"
+                "phoneNumber" to phoneNumber,
+                "token" to firebaseToken,
+                "os" to "ANDROID"
         )
         val functions = FirebaseFunctions.getInstance(BuildConfig.FIREBASE_REGION)
         return functions
-            .getHttpsCallable("getOTPCode")
-            .call(data)
+                .getHttpsCallable("getOTPCode")
+                .call(data)
     }
 
     private fun resendPostRequest(uid: String, phoneNumber: String): Task<HttpsCallableResult> {
 
         val data = hashMapOf(
-            "phoneNumber" to phoneNumber,
-            "token" to firebaseToken,
-            "os" to "ANDROID"
+                "phoneNumber" to phoneNumber,
+                "token" to firebaseToken,
+                "os" to "ANDROID"
         )
         val functions = FirebaseFunctions.getInstance(BuildConfig.FIREBASE_REGION)
         return functions
-            .getHttpsCallable("resendOTP")
-            .call(data)
+                .getHttpsCallable("resendOTP")
+                .call(data)
     }
 
     fun validateOTP(otp: String) {
@@ -618,49 +536,49 @@ class OnboardingActivity : BaseFragmentActivity(),
         onboardingActivityLoadingProgressBarFrame.visibility = View.VISIBLE
 
         val data = hashMapOf(
-            "OTP" to otp
+                "OTP" to otp
         )
         val functions = FirebaseFunctions.getInstance(BuildConfig.FIREBASE_REGION)
         functions
-            .getHttpsCallable("verifyOTP")
-            .call(data)
-            .addOnFailureListener { exception ->
-                crashlytics.recordException(exception)
-                crashlytics.setCustomKey("error", "verifyOTP Failed")
-                if (!isFinishing) {
-                    CentralLog.e("FF", exception.toString())
-                    onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
-                    updateOTPError(getString(R.string.unknown_error))
+                .getHttpsCallable("verifyOTP")
+                .call(data)
+                .addOnFailureListener { exception ->
+                    crashlytics.recordException(exception)
+                    crashlytics.setCustomKey("error", "verifyOTP Failed")
+                    if (!isFinishing) {
+                        CentralLog.e("FF", exception.toString())
+                        onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
+                        updateOTPError(getString(R.string.unknown_error))
+                    }
                 }
-            }
-            .addOnSuccessListener {
-                if (it.data.toString() == "true") {
-                    CentralLog.d("VerifyOTP", "Success")
-                    tv_error.visibility = View.INVISIBLE
-                    if (BluetoothMonitoringService.broadcastMessage == null || TempIDManager.needToUpdate(
-                            applicationContext
-                        )
-                    ) {
-                        getTemporaryID()
+                .addOnSuccessListener {
+                    if (it.data.toString() == "true") {
+                        CentralLog.d("VerifyOTP", "Success")
+                        tv_error?.visibility = View.INVISIBLE
+                        if (BluetoothMonitoringService.broadcastMessage == null || TempIDManager.needToUpdate(
+                                        applicationContext
+                                )
+                        ) {
+                            getTemporaryID()
+                        } else {
+                            if (!isFinishing) {
+                                CentralLog.d(TAG, "Retrieved Temporary ID successfully")
+                                onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
+                                navigateTo(pager.currentItem + 2)
+                                Preference.putHandShakePin(
+                                        WiqaytnaApp.AppContext,
+                                        uid.substring(0, 5)
+                                )
+                            }
+                        }
                     } else {
                         if (!isFinishing) {
-                            CentralLog.d(TAG, "Retrieved Temporary ID successfully")
+                            updateOTPError(getString(R.string.invalid_otp))
                             onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
-                            navigateTo(pager.currentItem + 2)
-                            Preference.putHandShakePin(
-                                WiqaytnaApp.AppContext,
-                                uid.substring(0, 5)
-                            )
+                            CentralLog.d("VERIFYOTP", "VERIFICATION FALSE")
                         }
                     }
-                } else {
-                    if (!isFinishing) {
-                        updateOTPError(getString(R.string.invalid_otp))
-                        onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
-                        CentralLog.d("VERIFYOTP", "VERIFICATION FALSE")
-                    }
                 }
-            }
     }
 
     fun resendCode(phoneNumber: String) {
@@ -675,25 +593,20 @@ class OnboardingActivity : BaseFragmentActivity(),
             crashlytics.setCustomKey("error", "couldn't resend the OTP")
             crashlytics.setCustomKey("phone", phoneNumber)
             Toast.makeText(
-                baseContext, resources.getString(R.string.server_problem),
-                Toast.LENGTH_SHORT
+                    baseContext, resources.getString(R.string.server_problem),
+                    Toast.LENGTH_SHORT
             ).show()
             onboardingActivityLoadingProgressBarFrame.visibility = View.GONE
         }
     }
 
     fun updatePhoneNumber(num: String) {
-        val onboardingFragment: OnboardingFragmentInterface = pagerAdapter!!.getItem(1)
+        val onboardingFragment: OnboardingFragmentInterface = pagerAdapter.getItem(1)
         onboardingFragment.onUpdatePhoneNumber(num)
     }
 
-    fun updatePhoneNumberError(error: String) {
-        val registerNumberFragment: OnboardingFragmentInterface = pagerAdapter!!.getItem(0)
-        registerNumberFragment.onError(error)
-    }
-
     private fun updateOTPError(error: String) {
-        val onboardingFragment: OnboardingFragmentInterface = pagerAdapter!!.getItem(1)
+        val onboardingFragment: OnboardingFragmentInterface = pagerAdapter.getItem(1)
         onboardingFragment.onError(error)
     }
 
@@ -702,29 +615,35 @@ class OnboardingActivity : BaseFragmentActivity(),
     }
 
     private inner class ScreenSlidePagerAdapter(fm: FragmentManager) :
-        FragmentStatePagerAdapter(fm) {
+            FragmentStatePagerAdapter(
+                    fm,
+                    BEHAVIOR_RESUME_ONLY_CURRENT_FRAGMENT
+            ) {
 
         val fragmentMap: MutableMap<Int, OnboardingFragmentInterface> = HashMap()
 
         override fun getCount(): Int = 5
 
         override fun getItem(position: Int): OnboardingFragmentInterface {
-            return fragmentMap.getOrPut(position, { createFragAtIndex(position) })
+            return fragmentMap.getOrPut(position) { createFragAtIndex(position) }
+        }
+
+        override fun instantiateItem(container: ViewGroup, position: Int): Any {
+            val fragment = super.instantiateItem(container, position) as OnboardingFragmentInterface
+            fragmentMap[position] = fragment
+            return fragment
         }
 
         private fun createFragAtIndex(index: Int): OnboardingFragmentInterface {
             return when (index) {
                 0 -> return RegisterNumberFragment()
                 1 -> return OTPFragment()
-//                2 -> return TOUFragment()
                 3 -> return SetupFragment()
-//                4 -> return SetupCompleteFragment()
                 else -> {
                     RegisterNumberFragment()
                 }
             }
         }
-
     }
 
 }

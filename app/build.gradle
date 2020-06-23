@@ -34,10 +34,10 @@ android {
     defaultConfig {
         applicationId "covid.trace.morocco"
         resValue "string", "build_config_package", "covid.trace.morocco"
-        minSdkVersion 22
+        minSdkVersion 21
         targetSdkVersion 28
-        versionCode 66
-        versionName "1.0.66"
+        versionCode 73
+        versionName "1.1.0"
         buildConfigField "String", "GITHASH", "\"${getGitHash()}\""
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
@@ -78,10 +78,13 @@ android {
         buildConfigField "String", "V2_CHARACTERISTIC_ID", V2_CHARACTERISTIC_ID
         buildConfigField "int", "ERROR_NOTIFICATION_ID", ERROR_NOTIFICATION_ID
 
+        resConfigs "fr", "ar"
     }
 
     buildTypes {
         debug {
+            manifestPlaceholders = [showPerfLogs:'true']
+
             buildConfigField "String", "FIREBASE_UPLOAD_BUCKET", STAGING_FIREBASE_UPLOAD_BUCKET
             buildConfigField "String", "BLE_SSID", STAGING_SERVICE_UUID
 
@@ -92,6 +95,7 @@ android {
         }
 
         release {
+            manifestPlaceholders = [showPerfLogs:'false']
 
             buildConfigField "String", "FIREBASE_UPLOAD_BUCKET", PRODUCTION_FIREBASE_UPLOAD_BUCKET
             buildConfigField "String", "BLE_SSID", PRODUCTION_SERVICE_UUID
